@@ -19,6 +19,7 @@ export async function POST(req: Request) {
     const jobDescription = body?.jobDescription?.trim();
     const cv = body?.cv?.trim();
     const apiKey = body?.apiKey?.trim();
+    const accessMode = body?.accessMode?.trim(); // own-key | trial | buy
 
     if (!jobDescription || !cv) {
       return NextResponse.json(
@@ -27,18 +28,38 @@ export async function POST(req: Request) {
       );
     }
 
-    if (!apiKey) {
+    let effectiveApiKey = "";
+
+    if (accessMode === "own-key") {
+      if (!apiKey) {
+        return NextResponse.json(
+          { error: "No API key provided. Enter your OpenAI API key to run the analysis." },
+          { status: 400 }
+        );
+      }
+      effectiveApiKey = apiKey;
+    } else if (accessMode === "trial") {
+      if (!process.env.OPENAI_API_KEY) {
+        return NextResponse.json(
+          { error: "Server trial mode is not configured yet." },
+          { status: 500 }
+        );
+      }
+      effectiveApiKey = process.env.OPENAI_API_KEY;
+    } else if (accessMode === "buy") {
       return NextResponse.json(
-        {
-          error:
-            "No API key provided. Enter your OpenAI API key to run the analysis.",
-        },
+        { error: "Paid credits are not enabled yet. Please contact me to get access." },
+        { status: 400 }
+      );
+    } else {
+      return NextResponse.json(
+        { error: "Invalid access mode." },
         { status: 400 }
       );
     }
 
     const client = new OpenAI({
-      apiKey,
+      apiKey: effectiveApiKey,
     });
 
     const prompt = `

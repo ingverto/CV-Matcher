@@ -15,12 +15,14 @@ type MatchResponse = {
 
 type UploadTarget = "job" | "cv";
 type InputMode = "text" | "pdf";
-type AccessMode = "own-key" | "demo";
+type AccessMode = "own-key" | "trial" | "buy";
 
 type PdfState = {
   fileName: string;
   extractedText: string;
 };
+
+const FREE_TRIAL_STORAGE_KEY = "cv_matcher_free_trial_used";
 
 export default function HomePage() {
   const [accessMode, setAccessMode] = useState<AccessMode>("own-key");
@@ -136,6 +138,16 @@ export default function HomePage() {
     setError("");
   }
 
+  function hasUsedFreeTrial() {
+    if (typeof window === "undefined") return false;
+    return localStorage.getItem(FREE_TRIAL_STORAGE_KEY) === "true";
+  }
+
+  function markFreeTrialUsed() {
+    if (typeof window === "undefined") return;
+    localStorage.setItem(FREE_TRIAL_STORAGE_KEY, "true");
+  }
+
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
     setLoading(true);
@@ -143,10 +155,6 @@ export default function HomePage() {
     setResult(null);
 
     try {
-      if (accessMode === "own-key" && !apiKey.trim()) {
-        throw new Error("Please enter your OpenAI API key.");
-      }
-
       if (!effectiveJobDescription.trim()) {
         throw new Error("Please provide a job description.");
       }
@@ -155,12 +163,25 @@ export default function HomePage() {
         throw new Error("Please provide a CV or resume.");
       }
 
+      if (accessMode === "own-key" && !apiKey.trim()) {
+        throw new Error("Please enter your OpenAI API key.");
+      }
+
+      if (accessMode === "trial" && hasUsedFreeTrial()) {
+        throw new Error("Your free trial has already been used. Buy credits or use your own API key.");
+      }
+
+      if (accessMode === "buy") {
+        throw new Error("Credit purchases are not automated yet. Contact me on GitHub to get access.");
+      }
+
       const res = await fetch("/api/match", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
+          accessMode,
           apiKey: accessMode === "own-key" ? apiKey : "",
           jobDescription: effectiveJobDescription,
           cv: effectiveCv,
@@ -171,6 +192,10 @@ export default function HomePage() {
 
       if (!res.ok) {
         throw new Error(data.error || "Something went wrong.");
+      }
+
+      if (accessMode === "trial") {
+        markFreeTrialUsed();
       }
 
       setResult(data);
@@ -198,6 +223,7 @@ export default function HomePage() {
   }
 
   const isBusy = loading || extracting !== null;
+  const trialUsed = hasUsedFreeTrial();
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -252,7 +278,7 @@ export default function HomePage() {
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                   <div className="font-semibold text-white">3. Run the analysis</div>
                   <div className="mt-1 text-slate-300">
-                    Get a score, missing keywords, strengths, gaps, and a recommendation.
+                    Use your own key, try one free analysis, or buy credits later.
                   </div>
                 </div>
               </div>
@@ -276,22 +302,34 @@ export default function HomePage() {
 
             <button
               type="button"
-              onClick={() => setAccessMode("demo")}
+              onClick={() => setAccessMode("trial")}
               className={`rounded-2xl px-4 py-2 text-sm font-medium transition ${
-                accessMode === "demo"
+                accessMode === "trial"
                   ? "bg-cyan-400 text-slate-950"
                   : "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"
               }`}
             >
-              Request demo access
+              Try 1 free analysis
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setAccessMode("buy")}
+              className={`rounded-2xl px-4 py-2 text-sm font-medium transition ${
+                accessMode === "buy"
+                  ? "bg-cyan-400 text-slate-950"
+                  : "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"
+              }`}
+            >
+              Buy credits
             </button>
           </div>
 
-          {accessMode === "own-key" ? (
+          {accessMode === "own-key" && (
             <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4">
               <h2 className="text-lg font-semibold text-white">Your OpenAI API key</h2>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-200">
-                Enter your own OpenAI API key to run the analysis. The key is only
+                Enter your own OpenAI API key to run unlimited analyses. The key is only
                 used for the request and is not stored in a database.
               </p>
 
@@ -308,22 +346,64 @@ export default function HomePage() {
                 />
               </div>
             </div>
-          ) : (
-            <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 p-4">
-              <h2 className="text-lg font-semibold text-white">Want to try it?</h2>
+          )}
+
+          {accessMode === "trial" && (
+            <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4">
+              <h2 className="text-lg font-semibold text-white">1 free analysis</h2>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-200">
-                If you want to test the tool but do not have your own OpenAI API key,
-                contact me on GitHub and I can help you get started.
+                Try the tool once for free without using your own API key.
               </p>
 
-              <a
-                href="https://github.com/ingverto"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="mt-4 inline-flex rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/20"
-              >
-                Contact me on GitHub
-              </a>
+              <div className="mt-4 inline-flex rounded-full border border-white/10 bg-black/20 px-3 py-1 text-sm text-slate-200">
+                Status: {trialUsed ? "Free trial already used" : "Free trial available"}
+              </div>
+
+              <p className="mt-3 text-sm text-slate-300">
+                After the free trial, you can use your own API key or buy credits.
+              </p>
+            </div>
+          )}
+
+          {accessMode === "buy" && (
+            <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 p-4">
+              <h2 className="text-lg font-semibold text-white">Buy credits</h2>
+              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-200">
+                Want to use the tool without your own API key? Start with one free
+                analysis, then contact me to buy credits.
+              </p>
+
+              <div className="mt-5 grid gap-4 md:grid-cols-2">
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="text-sm text-slate-400">Starter pack</div>
+                  <div className="mt-2 text-2xl font-bold text-white">10 analyses</div>
+                  <div className="mt-1 text-sm text-slate-300">5 SEK</div>
+                </div>
+
+                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                  <div className="text-sm text-slate-400">Value pack</div>
+                  <div className="mt-2 text-2xl font-bold text-white">20 analyses</div>
+                  <div className="mt-1 text-sm text-slate-300">10 SEK</div>
+                </div>
+              </div>
+
+              <div className="mt-5 flex flex-wrap gap-3">
+                <a
+                  href="https://github.com/ingverto"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/20"
+                >
+                  Contact me on GitHub
+                </a>
+
+                <button
+                  type="button"
+                  className="rounded-2xl border border-white/10 bg-black/20 px-4 py-2 text-sm font-medium text-slate-300"
+                >
+                  Stripe checkout coming soon
+                </button>
+              </div>
             </div>
           )}
         </section>
@@ -537,10 +617,10 @@ export default function HomePage() {
             <div className="flex flex-wrap items-center gap-3 rounded-3xl border border-white/10 bg-slate-900/80 p-4 shadow-xl backdrop-blur">
               <button
                 type="submit"
-                disabled={isBusy || accessMode === "demo"}
+                disabled={isBusy || accessMode === "buy"}
                 className="rounded-2xl bg-cyan-400 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {loading ? "Analyzing..." : "Match CV"}
+                {loading ? "Analyzing..." : accessMode === "trial" ? "Use free analysis" : "Match CV"}
               </button>
 
               <div className="text-sm text-slate-400">
@@ -548,18 +628,22 @@ export default function HomePage() {
                   ? "Reading PDF..."
                   : loading
                   ? "AI is analyzing the match..."
-                  : accessMode === "demo"
-                  ? "Demo mode selected"
+                  : accessMode === "buy"
+                  ? "Choose a credit option to continue"
+                  : accessMode === "trial"
+                  ? trialUsed
+                    ? "Free trial already used"
+                    : "1 free analysis available"
                   : "Ready"}
               </div>
             </div>
           </div>
         </form>
 
-        {accessMode === "demo" && (
+        {accessMode === "buy" && (
           <div className="mt-6 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-4 text-amber-100">
-            Demo mode does not run the analysis. Use your own API key or contact me on
-            GitHub for access.
+            Credit purchases are shown in the UI, but checkout is not automated yet.
+            For now, contact me on GitHub to get access.
           </div>
         )}
 
