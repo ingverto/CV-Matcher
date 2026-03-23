@@ -1,9 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 
-export default function SuccessPage() {
+function SuccessContent() {
   const searchParams = useSearchParams();
   const sessionId = searchParams.get("session_id");
 
@@ -29,7 +29,14 @@ export default function SuccessPage() {
           body: JSON.stringify({ sessionId }),
         });
 
-        const sessionData = await resSession.json();
+        const sessionText = await resSession.text();
+
+        let sessionData: { email?: string; error?: string };
+        try {
+          sessionData = JSON.parse(sessionText);
+        } catch {
+          throw new Error("Session endpoint did not return valid JSON.");
+        }
 
         if (!resSession.ok) {
           throw new Error(sessionData.error || "Failed to fetch session.");
@@ -39,7 +46,7 @@ export default function SuccessPage() {
           throw new Error("No email found for this checkout session.");
         }
 
-        const normalizedEmail = String(sessionData.email).trim().toLowerCase();
+        const normalizedEmail = sessionData.email.trim().toLowerCase();
         setEmail(normalizedEmail);
 
         const resCredits = await fetch("/api/credits", {
@@ -50,7 +57,14 @@ export default function SuccessPage() {
           body: JSON.stringify({ email: normalizedEmail }),
         });
 
-        const creditData = await resCredits.json();
+        const creditsText = await resCredits.text();
+
+        let creditData: { credits?: number; error?: string };
+        try {
+          creditData = JSON.parse(creditsText);
+        } catch {
+          throw new Error("Credits endpoint did not return valid JSON.");
+        }
 
         if (!resCredits.ok) {
           throw new Error(creditData.error || "Failed to fetch credits.");
@@ -59,7 +73,9 @@ export default function SuccessPage() {
         setCredits(creditData.credits ?? 0);
       } catch (err) {
         console.error(err);
-        setError(err instanceof Error ? err.message : "Could not fetch updated credits.");
+        setError(
+          err instanceof Error ? err.message : "Could not fetch updated credits."
+        );
       } finally {
         setLoading(false);
       }
@@ -81,7 +97,9 @@ export default function SuccessPage() {
           Your payment was completed successfully.
         </p>
 
-        {loading && <p className="mt-4 text-slate-400">Fetching your updated credits...</p>}
+        {loading && (
+          <p className="mt-4 text-slate-400">Fetching your updated credits...</p>
+        )}
 
         {!loading && credits !== null && (
           <div className="mt-6 rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4">
@@ -107,5 +125,29 @@ export default function SuccessPage() {
         </a>
       </div>
     </main>
+  );
+}
+
+export default function SuccessPage() {
+  return (
+    <Suspense
+      fallback={
+        <main className="min-h-screen bg-slate-950 px-4 py-16 text-slate-100">
+          <div className="mx-auto max-w-2xl rounded-3xl border border-white/10 bg-slate-900/80 p-8 shadow-xl">
+            <div className="mb-3 inline-flex rounded-full border border-emerald-400/20 bg-emerald-400/10 px-3 py-1 text-xs font-semibold uppercase tracking-[0.2em] text-emerald-300">
+              Payment successful
+            </div>
+
+            <h1 className="text-3xl font-bold text-white">Thank you</h1>
+
+            <p className="mt-4 leading-7 text-slate-300">
+              Finalizing your payment...
+            </p>
+          </div>
+        </main>
+      }
+    >
+      <SuccessContent />
+    </Suspense>
   );
 }
