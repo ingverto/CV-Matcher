@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 type MatchResponse = {
   overallScore: number;
@@ -15,7 +15,7 @@ type MatchResponse = {
 
 type UploadTarget = "job" | "cv";
 type InputMode = "text" | "pdf";
-type AccessMode = "own-key" | "trial" | "buy";
+type AccessMode = "trial" | "buy";
 
 type PdfState = {
   fileName: string;
@@ -25,8 +25,7 @@ type PdfState = {
 const FREE_TRIAL_STORAGE_KEY = "cv_matcher_free_trial_used";
 
 export default function HomePage() {
-  const [accessMode, setAccessMode] = useState<AccessMode>("own-key");
-  const [apiKey, setApiKey] = useState("");
+  const [accessMode, setAccessMode] = useState<AccessMode>("trial");
 
   const [jobInputMode, setJobInputMode] = useState<InputMode>("text");
   const [cvInputMode, setCvInputMode] = useState<InputMode>("text");
@@ -34,16 +33,26 @@ export default function HomePage() {
   const [jobText, setJobText] = useState("");
   const [cvText, setCvText] = useState("");
 
+  const [creditsLeft, setCreditsLeft] = useState<number | null>(null);
   const [jobPdf, setJobPdf] = useState<PdfState | null>(null);
   const [cvPdf, setCvPdf] = useState<PdfState | null>(null);
-
+  const [userEmail, setUserEmail] = useState("");
   const [result, setResult] = useState<MatchResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [extracting, setExtracting] = useState<UploadTarget | null>(null);
   const [error, setError] = useState("");
 
+  const [trialUsed, setTrialUsed] = useState(false);
+  const [trialChecked, setTrialChecked] = useState(false);
+
   const jobPdfInputRef = useRef<HTMLInputElement | null>(null);
   const cvPdfInputRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const used = localStorage.getItem(FREE_TRIAL_STORAGE_KEY) === "true";
+    setTrialUsed(used);
+    setTrialChecked(true);
+  }, []);
 
   const effectiveJobDescription = useMemo(() => {
     return jobInputMode === "pdf" ? jobPdf?.extractedText ?? "" : jobText;
@@ -81,6 +90,36 @@ export default function HomePage() {
     }
 
     return pageTexts.join("\n\n");
+  }
+
+  async function fetchCredits(email: string) {
+    try {
+      const normalizedEmail = email.trim().toLowerCase();
+
+      if (!normalizedEmail) {
+        setCreditsLeft(null);
+        return;
+      }
+
+      const res = await fetch("/api/credits", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email: normalizedEmail }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Failed to fetch credits.");
+      }
+
+      setCreditsLeft(data.credits);
+    } catch (err) {
+      console.error(err);
+      setCreditsLeft(null);
+    }
   }
 
   async function handlePdfUpload(file: File, target: UploadTarget) {
@@ -139,13 +178,37 @@ export default function HomePage() {
   }
 
   function hasUsedFreeTrial() {
-    if (typeof window === "undefined") return false;
-    return localStorage.getItem(FREE_TRIAL_STORAGE_KEY) === "true";
+    return trialUsed;
   }
 
   function markFreeTrialUsed() {
-    if (typeof window === "undefined") return;
     localStorage.setItem(FREE_TRIAL_STORAGE_KEY, "true");
+    setTrialUsed(true);
+    setTrialChecked(true);
+  }
+
+  async function handleBuyCredits(pack: "10" | "20") {
+    try {
+      setError("");
+
+      const res = await fetch("/api/checkout", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ pack }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || "Could not start checkout.");
+      }
+
+      window.location.href = data.url;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Unknown checkout error.");
+    }
   }
 
   async function handleSubmit(e: FormEvent) {
@@ -163,16 +226,16 @@ export default function HomePage() {
         throw new Error("Please provide a CV or resume.");
       }
 
-      if (accessMode === "own-key" && !apiKey.trim()) {
-        throw new Error("Please enter your OpenAI API key.");
+      if (accessMode === "trial" && !trialChecked) {
+        throw new Error("Checking free trial status. Please try again.");
       }
 
       if (accessMode === "trial" && hasUsedFreeTrial()) {
-        throw new Error("Your free trial has already been used. Buy credits or use your own API key.");
+        throw new Error("Your free trial has already been used. Please use credits to continue.");
       }
 
-      if (accessMode === "buy") {
-        throw new Error("Credit purchases are not automated yet. Contact me on GitHub to get access.");
+      if (accessMode === "buy" && !userEmail.trim()) {
+        throw new Error("Please enter the email used for your credits.");
       }
 
       const res = await fetch("/api/match", {
@@ -182,9 +245,9 @@ export default function HomePage() {
         },
         body: JSON.stringify({
           accessMode,
-          apiKey: accessMode === "own-key" ? apiKey : "",
           jobDescription: effectiveJobDescription,
           cv: effectiveCv,
+          email: userEmail.trim().toLowerCase(),
         }),
       });
 
@@ -199,6 +262,10 @@ export default function HomePage() {
       }
 
       setResult(data);
+
+      if (accessMode === "buy" && userEmail.trim()) {
+        await fetchCredits(userEmail);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error.");
     } finally {
@@ -223,7 +290,25 @@ export default function HomePage() {
   }
 
   const isBusy = loading || extracting !== null;
-  const trialUsed = hasUsedFreeTrial();
+  const trialStatusText = !trialChecked
+    ? "Checking..."
+    : trialUsed
+    ? "Free trial already used"
+    : "Free trial available";
+
+  const actionStatusText = extracting
+    ? "Reading PDF..."
+    : loading
+    ? "AI is analyzing the match..."
+    : accessMode === "buy"
+    ? creditsLeft !== null
+      ? `${creditsLeft} analyses available`
+      : "Enter your email to check your credits"
+    : !trialChecked
+    ? "Checking free trial..."
+    : trialUsed
+    ? "Free trial already used"
+    : "1 free analysis available";
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -240,8 +325,8 @@ export default function HomePage() {
               </h1>
 
               <p className="mt-4 max-w-2xl text-base leading-7 text-slate-300 md:text-lg">
-                Match a resume against a job description with AI. Paste text or upload
-                PDFs and get a clear score, gap analysis, and recommendation.
+                Match a resume against a job description with AI. Paste text or upload PDFs
+                and get a clear score, gap analysis, and recommendation.
               </p>
 
               <div className="mt-6 flex flex-wrap gap-3 text-sm text-slate-300">
@@ -265,20 +350,16 @@ export default function HomePage() {
               <div className="mt-4 space-y-4 text-sm text-slate-200">
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                   <div className="font-semibold text-white">1. Add a job description</div>
-                  <div className="mt-1 text-slate-300">
-                    Choose text or PDF upload.
-                  </div>
+                  <div className="mt-1 text-slate-300">Choose text or PDF upload.</div>
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                   <div className="font-semibold text-white">2. Add a CV or resume</div>
-                  <div className="mt-1 text-slate-300">
-                    Paste text or upload a PDF file.
-                  </div>
+                  <div className="mt-1 text-slate-300">Paste text or upload a PDF file.</div>
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                   <div className="font-semibold text-white">3. Run the analysis</div>
                   <div className="mt-1 text-slate-300">
-                    Use your own key, try one free analysis, or buy credits later.
+                    Try one free analysis, then continue with credits.
                   </div>
                 </div>
               </div>
@@ -288,18 +369,6 @@ export default function HomePage() {
 
         <section className="mb-8 rounded-3xl border border-white/10 bg-slate-900/80 p-5 shadow-xl">
           <div className="mb-4 flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => setAccessMode("own-key")}
-              className={`rounded-2xl px-4 py-2 text-sm font-medium transition ${
-                accessMode === "own-key"
-                  ? "bg-cyan-400 text-slate-950"
-                  : "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"
-              }`}
-            >
-              Use your own API key
-            </button>
-
             <button
               type="button"
               onClick={() => setAccessMode("trial")}
@@ -321,88 +390,84 @@ export default function HomePage() {
                   : "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"
               }`}
             >
-              Buy credits
+              Use credits
             </button>
           </div>
-
-          {accessMode === "own-key" && (
-            <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4">
-              <h2 className="text-lg font-semibold text-white">Your OpenAI API key</h2>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-200">
-                Enter your own OpenAI API key to run unlimited analyses. The key is only
-                used for the request and is not stored in a database.
-              </p>
-
-              <div className="mt-4">
-                <label className="mb-2 block text-sm font-medium text-slate-200">
-                  OpenAI API key
-                </label>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="sk-..."
-                  className="w-full rounded-2xl border border-white/10 bg-slate-950/80 p-4 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50"
-                />
-              </div>
-            </div>
-          )}
 
           {accessMode === "trial" && (
             <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4">
               <h2 className="text-lg font-semibold text-white">1 free analysis</h2>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-200">
-                Try the tool once for free without using your own API key.
+                Try the tool once for free.
               </p>
 
               <div className="mt-4 inline-flex rounded-full border border-white/10 bg-black/20 px-3 py-1 text-sm text-slate-200">
-                Status: {trialUsed ? "Free trial already used" : "Free trial available"}
+                Status: {trialStatusText}
               </div>
 
               <p className="mt-3 text-sm text-slate-300">
-                After the free trial, you can use your own API key or buy credits.
+                After the free trial, buy credits to continue using the tool.
               </p>
             </div>
           )}
 
           {accessMode === "buy" && (
             <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 p-4">
-              <h2 className="text-lg font-semibold text-white">Buy credits</h2>
+              <h2 className="text-lg font-semibold text-white">Use credits</h2>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-200">
-                Want to use the tool without your own API key? Start with one free
-                analysis, then contact me to buy credits.
+                Enter the email connected to your credits, or buy a new credit pack below.
               </p>
+
+              <div className="mt-4">
+                <label className="mb-2 block text-sm font-medium text-slate-200">
+                  Email used for credits
+                </label>
+                <input
+                  type="email"
+                  value={userEmail}
+                  onChange={(e) => setUserEmail(e.target.value)}
+                  onBlur={() => {
+                    if (userEmail.trim()) {
+                      void fetchCredits(userEmail);
+                    }
+                  }}
+                  placeholder="Enter your email"
+                  className="w-full rounded-2xl border border-white/10 bg-slate-950/80 p-4 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50"
+                />
+              </div>
+
+              {creditsLeft !== null && (
+                <div className="mt-4 inline-flex rounded-full border border-white/10 bg-black/20 px-3 py-1 text-sm text-slate-200">
+                  {userEmail.trim().toLowerCase()} · {creditsLeft} analyses left
+                </div>
+              )}
 
               <div className="mt-5 grid gap-4 md:grid-cols-2">
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                   <div className="text-sm text-slate-400">Starter pack</div>
                   <div className="mt-2 text-2xl font-bold text-white">10 analyses</div>
                   <div className="mt-1 text-sm text-slate-300">5 SEK</div>
+                  <button
+                    type="button"
+                    onClick={() => handleBuyCredits("10")}
+                    className="mt-4 inline-flex rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/20"
+                  >
+                    Buy 10 analyses
+                  </button>
                 </div>
 
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                   <div className="text-sm text-slate-400">Value pack</div>
                   <div className="mt-2 text-2xl font-bold text-white">20 analyses</div>
                   <div className="mt-1 text-sm text-slate-300">10 SEK</div>
+                  <button
+                    type="button"
+                    onClick={() => handleBuyCredits("20")}
+                    className="mt-4 inline-flex rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/20"
+                  >
+                    Buy 20 analyses
+                  </button>
                 </div>
-              </div>
-
-              <div className="mt-5 flex flex-wrap gap-3">
-                <a
-                  href="https://github.com/ingverto"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="inline-flex rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/20"
-                >
-                  Contact me on GitHub
-                </a>
-
-                <button
-                  type="button"
-                  className="rounded-2xl border border-white/10 bg-black/20 px-4 py-2 text-sm font-medium text-slate-300"
-                >
-                  Stripe checkout coming soon
-                </button>
               </div>
             </div>
           )}
@@ -413,9 +478,7 @@ export default function HomePage() {
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-xl font-semibold text-white">Job Description</h2>
-                <p className="text-sm text-slate-400">
-                  Choose text input or upload a PDF.
-                </p>
+                <p className="text-sm text-slate-400">Choose text input or upload a PDF.</p>
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -500,8 +563,8 @@ export default function HomePage() {
                       <>
                         <div className="font-medium text-white">No PDF uploaded yet</div>
                         <div className="mt-1 text-slate-400">
-                          Upload a job description PDF. The extracted text will be used in
-                          the analysis without being shown here.
+                          Upload a job description PDF. The extracted text will be used in the
+                          analysis without being shown here.
                         </div>
                       </>
                     )}
@@ -515,9 +578,7 @@ export default function HomePage() {
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-xl font-semibold text-white">CV / Resume</h2>
-                <p className="text-sm text-slate-400">
-                  Choose text input or upload a PDF.
-                </p>
+                <p className="text-sm text-slate-400">Choose text input or upload a PDF.</p>
               </div>
 
               <div className="flex flex-wrap gap-2">
@@ -602,8 +663,8 @@ export default function HomePage() {
                       <>
                         <div className="font-medium text-white">No PDF uploaded yet</div>
                         <div className="mt-1 text-slate-400">
-                          Upload a CV or resume PDF. The extracted text will be used in
-                          the analysis without being shown here.
+                          Upload a CV or resume PDF. The extracted text will be used in the
+                          analysis without being shown here.
                         </div>
                       </>
                     )}
@@ -617,35 +678,20 @@ export default function HomePage() {
             <div className="flex flex-wrap items-center gap-3 rounded-3xl border border-white/10 bg-slate-900/80 p-4 shadow-xl backdrop-blur">
               <button
                 type="submit"
-                disabled={isBusy || accessMode === "buy"}
+                disabled={isBusy || (accessMode === "trial" && !trialChecked)}
                 className="rounded-2xl bg-cyan-400 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {loading ? "Analyzing..." : accessMode === "trial" ? "Use free analysis" : "Match CV"}
+                {loading
+                  ? "Analyzing..."
+                  : accessMode === "trial"
+                  ? "Use free analysis"
+                  : "Match CV"}
               </button>
 
-              <div className="text-sm text-slate-400">
-                {extracting
-                  ? "Reading PDF..."
-                  : loading
-                  ? "AI is analyzing the match..."
-                  : accessMode === "buy"
-                  ? "Choose a credit option to continue"
-                  : accessMode === "trial"
-                  ? trialUsed
-                    ? "Free trial already used"
-                    : "1 free analysis available"
-                  : "Ready"}
-              </div>
+              <div className="text-sm text-slate-400">{actionStatusText}</div>
             </div>
           </div>
         </form>
-
-        {accessMode === "buy" && (
-          <div className="mt-6 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-4 text-amber-100">
-            Credit purchases are shown in the UI, but checkout is not automated yet.
-            For now, contact me on GitHub to get access.
-          </div>
-        )}
 
         {error && (
           <div className="mt-6 rounded-2xl border border-rose-500/20 bg-rose-500/10 p-4 text-rose-200">
@@ -760,16 +806,16 @@ export default function HomePage() {
                 <h3 className="text-lg font-semibold text-white">Quick interpretation</h3>
                 <div className="mt-4 space-y-3 text-sm leading-7 text-slate-300">
                   <p>
-                    <span className="font-semibold text-white">80–100:</span> strong match
-                    for the role.
+                    <span className="font-semibold text-white">80–100:</span> strong match for
+                    the role.
                   </p>
                   <p>
                     <span className="font-semibold text-white">60–79:</span> relevant profile
                     with clear gaps.
                   </p>
                   <p>
-                    <span className="font-semibold text-white">0–59:</span> low match or
-                    wrong seniority level.
+                    <span className="font-semibold text-white">0–59:</span> low match or wrong
+                    seniority level.
                   </p>
                 </div>
               </div>
