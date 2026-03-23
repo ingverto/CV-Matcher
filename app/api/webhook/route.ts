@@ -64,10 +64,23 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: "Invalid pack metadata." }, { status: 400 });
       }
 
-      const { error: upsertError } = await supabaseAdmin.from("credits").upsert(
+      const { data: currentUser, error: fetchError } = await supabaseAdmin
+        .from("credits")
+        .select("credits")
+        .eq("email", email)
+        .maybeSingle();
+
+      if (fetchError) {
+        console.error("Failed to fetch current credits:", fetchError);
+        return NextResponse.json({ error: "Failed to fetch current credits." }, { status: 500 });
+      }
+
+      const newCredits = (currentUser?.credits ?? 0) + creditsToAdd;
+
+      const { error: saveError } = await supabaseAdmin.from("credits").upsert(
         {
           email,
-          credits: creditsToAdd,
+          credits: newCredits,
         },
         {
           onConflict: "email",
@@ -75,29 +88,9 @@ export async function POST(req: NextRequest) {
         }
       );
 
-      if (upsertError) {
-        const { data: currentUser, error: fetchError } = await supabaseAdmin
-          .from("credits")
-          .select("credits")
-          .eq("email", email)
-          .maybeSingle();
-
-        if (fetchError) {
-          console.error("Failed to fetch user after upsert error:", fetchError);
-          return NextResponse.json({ error: "Failed to update credits." }, { status: 500 });
-        }
-
-        const newCredits = (currentUser?.credits ?? 0) + creditsToAdd;
-
-        const { error: updateError } = await supabaseAdmin
-          .from("credits")
-          .update({ credits: newCredits })
-          .eq("email", email);
-
-        if (updateError) {
-          console.error("Failed to increment credits:", updateError);
-          return NextResponse.json({ error: "Failed to increment credits." }, { status: 500 });
-        }
+      if (saveError) {
+        console.error("Failed to save updated credits:", saveError);
+        return NextResponse.json({ error: "Failed to save updated credits." }, { status: 500 });
       }
 
       const { error: eventInsertError } = await supabaseAdmin
