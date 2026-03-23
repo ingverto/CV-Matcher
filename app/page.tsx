@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useMemo, useRef, useState } from "react";
 
 type MatchResponse = {
   overallScore: number;
@@ -15,18 +15,13 @@ type MatchResponse = {
 
 type UploadTarget = "job" | "cv";
 type InputMode = "text" | "pdf";
-type AccessMode = "trial" | "buy";
 
 type PdfState = {
   fileName: string;
   extractedText: string;
 };
 
-const FREE_TRIAL_STORAGE_KEY = "cv_matcher_free_trial_used";
-
 export default function HomePage() {
-  const [accessMode, setAccessMode] = useState<AccessMode>("trial");
-
   const [jobInputMode, setJobInputMode] = useState<InputMode>("text");
   const [cvInputMode, setCvInputMode] = useState<InputMode>("text");
 
@@ -42,17 +37,8 @@ export default function HomePage() {
   const [extracting, setExtracting] = useState<UploadTarget | null>(null);
   const [error, setError] = useState("");
 
-  const [trialUsed, setTrialUsed] = useState(false);
-  const [trialChecked, setTrialChecked] = useState(false);
-
   const jobPdfInputRef = useRef<HTMLInputElement | null>(null);
   const cvPdfInputRef = useRef<HTMLInputElement | null>(null);
-
-  useEffect(() => {
-    const used = localStorage.getItem(FREE_TRIAL_STORAGE_KEY) === "true";
-    setTrialUsed(used);
-    setTrialChecked(true);
-  }, []);
 
   const effectiveJobDescription = useMemo(() => {
     return jobInputMode === "pdf" ? jobPdf?.extractedText ?? "" : jobText;
@@ -158,11 +144,15 @@ export default function HomePage() {
   function clearJobInput() {
     setJobText("");
     setJobPdf(null);
+    setResult(null);
+    setError("");
   }
 
   function clearCvInput() {
     setCvText("");
     setCvPdf(null);
+    setResult(null);
+    setError("");
   }
 
   function switchJobMode(mode: InputMode) {
@@ -177,16 +167,6 @@ export default function HomePage() {
     setError("");
   }
 
-  function hasUsedFreeTrial() {
-    return trialUsed;
-  }
-
-  function markFreeTrialUsed() {
-    localStorage.setItem(FREE_TRIAL_STORAGE_KEY, "true");
-    setTrialUsed(true);
-    setTrialChecked(true);
-  }
-
   async function handleBuyCredits(pack: "10" | "20") {
     try {
       setError("");
@@ -196,7 +176,10 @@ export default function HomePage() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ pack }),
+        body: JSON.stringify({
+          pack,
+          email: userEmail.trim().toLowerCase(),
+        }),
       });
 
       const data = await res.json();
@@ -218,6 +201,10 @@ export default function HomePage() {
     setResult(null);
 
     try {
+      if (!userEmail.trim()) {
+        throw new Error("Please enter your email.");
+      }
+
       if (!effectiveJobDescription.trim()) {
         throw new Error("Please provide a job description.");
       }
@@ -226,25 +213,12 @@ export default function HomePage() {
         throw new Error("Please provide a CV or resume.");
       }
 
-      if (accessMode === "trial" && !trialChecked) {
-        throw new Error("Checking free trial status. Please try again.");
-      }
-
-      if (accessMode === "trial" && hasUsedFreeTrial()) {
-        throw new Error("Your free trial has already been used. Please use credits to continue.");
-      }
-
-      if (accessMode === "buy" && !userEmail.trim()) {
-        throw new Error("Please enter the email used for your credits.");
-      }
-
       const res = await fetch("/api/match", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          accessMode,
           jobDescription: effectiveJobDescription,
           cv: effectiveCv,
           email: userEmail.trim().toLowerCase(),
@@ -257,15 +231,8 @@ export default function HomePage() {
         throw new Error(data.error || "Something went wrong.");
       }
 
-      if (accessMode === "trial") {
-        markFreeTrialUsed();
-      }
-
       setResult(data);
-
-      if (accessMode === "buy" && userEmail.trim()) {
-        await fetchCredits(userEmail);
-      }
+      await fetchCredits(userEmail);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error.");
     } finally {
@@ -290,25 +257,6 @@ export default function HomePage() {
   }
 
   const isBusy = loading || extracting !== null;
-  const trialStatusText = !trialChecked
-    ? "Checking..."
-    : trialUsed
-    ? "Free trial already used"
-    : "Free trial available";
-
-  const actionStatusText = extracting
-    ? "Reading PDF..."
-    : loading
-    ? "AI is analyzing the match..."
-    : accessMode === "buy"
-    ? creditsLeft !== null
-      ? `${creditsLeft} analyses available`
-      : "Enter your email to check your credits"
-    : !trialChecked
-    ? "Checking free trial..."
-    : trialUsed
-    ? "Free trial already used"
-    : "1 free analysis available";
 
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100">
@@ -349,17 +297,19 @@ export default function HomePage() {
               <div className="text-sm font-medium text-slate-300">How it works</div>
               <div className="mt-4 space-y-4 text-sm text-slate-200">
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <div className="font-semibold text-white">1. Add a job description</div>
-                  <div className="mt-1 text-slate-300">Choose text or PDF upload.</div>
+                  <div className="font-semibold text-white">1. Enter your email</div>
+                  <div className="mt-1 text-slate-300">
+                    New users get 1 free analysis automatically.
+                  </div>
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <div className="font-semibold text-white">2. Add a CV or resume</div>
-                  <div className="mt-1 text-slate-300">Paste text or upload a PDF file.</div>
+                  <div className="font-semibold text-white">2. Add job description and CV</div>
+                  <div className="mt-1 text-slate-300">Paste text or upload PDF files.</div>
                 </div>
                 <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
                   <div className="font-semibold text-white">3. Run the analysis</div>
                   <div className="mt-1 text-slate-300">
-                    Try one free analysis, then continue with credits.
+                    If free usage is gone, available credits are used automatically.
                   </div>
                 </div>
               </div>
@@ -368,109 +318,72 @@ export default function HomePage() {
         </section>
 
         <section className="mb-8 rounded-3xl border border-white/10 bg-slate-900/80 p-5 shadow-xl">
-          <div className="mb-4 flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => setAccessMode("trial")}
-              className={`rounded-2xl px-4 py-2 text-sm font-medium transition ${
-                accessMode === "trial"
-                  ? "bg-cyan-400 text-slate-950"
-                  : "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"
-              }`}
-            >
-              Try 1 free analysis
-            </button>
+          <div className="rounded-2xl border border-cyan-400/20 bg-cyan-400/10 p-4">
+            <h2 className="text-lg font-semibold text-white">Start your analysis</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-200">
+              Enter your email to begin. New users get 1 free analysis automatically.
+              After that, available credits will be used.
+            </p>
 
-            <button
-              type="button"
-              onClick={() => setAccessMode("buy")}
-              className={`rounded-2xl px-4 py-2 text-sm font-medium transition ${
-                accessMode === "buy"
-                  ? "bg-cyan-400 text-slate-950"
-                  : "border border-white/10 bg-white/5 text-slate-200 hover:bg-white/10"
-              }`}
-            >
-              Use credits
-            </button>
+            <div className="mt-4">
+              <label className="mb-2 block text-sm font-medium text-slate-200">
+                Your email
+              </label>
+              <input
+                type="email"
+                value={userEmail}
+                onChange={(e) => setUserEmail(e.target.value)}
+                onBlur={() => {
+                  if (userEmail.trim()) {
+                    void fetchCredits(userEmail);
+                  }
+                }}
+                placeholder="Enter your email"
+                className="w-full rounded-2xl border border-white/10 bg-slate-950/80 p-4 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50"
+              />
+            </div>
+
+            {creditsLeft !== null && (
+              <div className="mt-4 inline-flex rounded-full border border-white/10 bg-black/20 px-3 py-1 text-sm text-slate-200">
+                {userEmail.trim().toLowerCase()} · {creditsLeft} analyses left
+              </div>
+            )}
           </div>
 
-          {accessMode === "trial" && (
-            <div className="rounded-2xl border border-emerald-400/20 bg-emerald-400/10 p-4">
-              <h2 className="text-lg font-semibold text-white">1 free analysis</h2>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-200">
-                Try the tool once for free.
-              </p>
+          <div className="mt-5 rounded-2xl border border-amber-400/20 bg-amber-400/10 p-4">
+            <h2 className="text-lg font-semibold text-white">Need more analyses?</h2>
+            <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-200">
+              Buy credits anytime and they will be connected to your email automatically.
+            </p>
 
-              <div className="mt-4 inline-flex rounded-full border border-white/10 bg-black/20 px-3 py-1 text-sm text-slate-200">
-                Status: {trialStatusText}
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                <div className="text-sm text-slate-400">Starter pack</div>
+                <div className="mt-2 text-2xl font-bold text-white">10 analyses</div>
+                <div className="mt-1 text-sm text-slate-300">5 SEK</div>
+                <button
+                  type="button"
+                  onClick={() => handleBuyCredits("10")}
+                  className="mt-4 inline-flex rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/20"
+                >
+                  Buy 10 analyses
+                </button>
               </div>
 
-              <p className="mt-3 text-sm text-slate-300">
-                After the free trial, buy credits to continue using the tool.
-              </p>
-            </div>
-          )}
-
-          {accessMode === "buy" && (
-            <div className="rounded-2xl border border-amber-400/20 bg-amber-400/10 p-4">
-              <h2 className="text-lg font-semibold text-white">Use credits</h2>
-              <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-200">
-                Enter the email connected to your credits, or buy a new credit pack below.
-              </p>
-
-              <div className="mt-4">
-                <label className="mb-2 block text-sm font-medium text-slate-200">
-                  Email used for credits
-                </label>
-                <input
-                  type="email"
-                  value={userEmail}
-                  onChange={(e) => setUserEmail(e.target.value)}
-                  onBlur={() => {
-                    if (userEmail.trim()) {
-                      void fetchCredits(userEmail);
-                    }
-                  }}
-                  placeholder="Enter your email"
-                  className="w-full rounded-2xl border border-white/10 bg-slate-950/80 p-4 text-slate-100 outline-none transition placeholder:text-slate-500 focus:border-cyan-400/50"
-                />
-              </div>
-
-              {creditsLeft !== null && (
-                <div className="mt-4 inline-flex rounded-full border border-white/10 bg-black/20 px-3 py-1 text-sm text-slate-200">
-                  {userEmail.trim().toLowerCase()} · {creditsLeft} analyses left
-                </div>
-              )}
-
-              <div className="mt-5 grid gap-4 md:grid-cols-2">
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <div className="text-sm text-slate-400">Starter pack</div>
-                  <div className="mt-2 text-2xl font-bold text-white">10 analyses</div>
-                  <div className="mt-1 text-sm text-slate-300">5 SEK</div>
-                  <button
-                    type="button"
-                    onClick={() => handleBuyCredits("10")}
-                    className="mt-4 inline-flex rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/20"
-                  >
-                    Buy 10 analyses
-                  </button>
-                </div>
-
-                <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
-                  <div className="text-sm text-slate-400">Value pack</div>
-                  <div className="mt-2 text-2xl font-bold text-white">20 analyses</div>
-                  <div className="mt-1 text-sm text-slate-300">10 SEK</div>
-                  <button
-                    type="button"
-                    onClick={() => handleBuyCredits("20")}
-                    className="mt-4 inline-flex rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/20"
-                  >
-                    Buy 20 analyses
-                  </button>
-                </div>
+              <div className="rounded-2xl border border-white/10 bg-black/20 p-4">
+                <div className="text-sm text-slate-400">Value pack</div>
+                <div className="mt-2 text-2xl font-bold text-white">20 analyses</div>
+                <div className="mt-1 text-sm text-slate-300">10 SEK</div>
+                <button
+                  type="button"
+                  onClick={() => handleBuyCredits("20")}
+                  className="mt-4 inline-flex rounded-2xl border border-white/10 bg-white/10 px-4 py-2 text-sm font-medium text-white transition hover:bg-white/20"
+                >
+                  Buy 20 analyses
+                </button>
               </div>
             </div>
-          )}
+          </div>
         </section>
 
         <form onSubmit={handleSubmit} className="grid gap-6 xl:grid-cols-2">
@@ -678,17 +591,21 @@ export default function HomePage() {
             <div className="flex flex-wrap items-center gap-3 rounded-3xl border border-white/10 bg-slate-900/80 p-4 shadow-xl backdrop-blur">
               <button
                 type="submit"
-                disabled={isBusy || (accessMode === "trial" && !trialChecked)}
+                disabled={isBusy}
                 className="rounded-2xl bg-cyan-400 px-6 py-3 text-sm font-semibold text-slate-950 transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {loading
-                  ? "Analyzing..."
-                  : accessMode === "trial"
-                  ? "Use free analysis"
-                  : "Match CV"}
+                {loading ? "Analyzing..." : "Analyze CV"}
               </button>
 
-              <div className="text-sm text-slate-400">{actionStatusText}</div>
+              <div className="text-sm text-slate-400">
+                {extracting
+                  ? "Reading PDF..."
+                  : loading
+                  ? "AI is analyzing the match..."
+                  : creditsLeft !== null
+                  ? `${creditsLeft} analyses available`
+                  : "Enter your email to start"}
+              </div>
             </div>
           </div>
         </form>

@@ -1,25 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import OpenAI from "openai";
-import { supabaseAdmin } from "@/lib/supabase-admin";
+import { supabaseAdmin } from "../../../lib/supabase-admin";
 
 const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY!,
 });
 
-type AccessMode = "trial" | "buy";
-
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
 
-    const accessMode = String(body.accessMode || "") as AccessMode;
     const jobDescription = String(body.jobDescription || "").trim();
     const cv = String(body.cv || "").trim();
     const email = String(body.email || "").trim().toLowerCase();
-
-    if (accessMode !== "trial" && accessMode !== "buy") {
-      return NextResponse.json({ error: "Invalid access mode." }, { status: 400 });
-    }
 
     if (!jobDescription) {
       return NextResponse.json({ error: "Please provide a job description." }, { status: 400 });
@@ -52,20 +45,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Failed to check user status." }, { status: 500 });
     }
 
-    if (accessMode === "trial" && user?.free_trial_used) {
+    let usageMode: "trial" | "credits";
+
+    if (!user || user.free_trial_used === false) {
+      usageMode = "trial";
+    } else if ((user.credits ?? 0) > 0) {
+      usageMode = "credits";
+    } else {
       return NextResponse.json(
-        { error: "Your free trial has already been used." },
+        {
+          error:
+            "Your free analysis has already been used and you do not have any credits left.",
+          needsCredits: true,
+        },
         { status: 403 }
       );
-    }
-
-    if (accessMode === "buy") {
-      if (!user || user.credits < 1) {
-        return NextResponse.json(
-          { error: "You do not have enough credits." },
-          { status: 403 }
-        );
-      }
     }
 
     const prompt = `
@@ -98,7 +92,7 @@ CV:
 `;
 
     const response = await openai.responses.create({
-      model: "gpt-4.1-mini",
+      model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
       input: [
         {
           role: "system",
@@ -141,8 +135,8 @@ CV:
       return NextResponse.json({ error: "Invalid AI response format." }, { status: 500 });
     }
 
-    if (accessMode === "trial") {
-      const { error: trialUpdateError } = await supabaseAdmin.from("credits").upsert(
+    if (usageMode === "trial") {
+      const { error: trialError } = await supabaseAdmin.from("credits").upsert(
         {
           email,
           credits: user?.credits ?? 0,
@@ -154,8 +148,8 @@ CV:
         }
       );
 
-      if (trialUpdateError) {
-        console.error("Failed to mark trial as used:", trialUpdateError);
+      if (trialError) {
+        console.error("Failed to mark free trial as used:", trialError);
         return NextResponse.json(
           { error: "Analysis completed, but failed to save free trial status." },
           { status: 500 }
@@ -163,7 +157,7 @@ CV:
       }
     }
 
-    if (accessMode === "buy") {
+    if (usageMode === "credits") {
       const { data: decrementSuccess, error: decrementError } = await supabaseAdmin.rpc(
         "decrement_credits",
         {
@@ -188,7 +182,10 @@ CV:
       }
     }
 
-    return NextResponse.json(parsed);
+    return NextResponse.json({
+      ...parsed,
+      usageMode,
+    });
   } catch (error) {
     console.error("Match route failed:", error);
     return NextResponse.json({ error: "Something went wrong." }, { status: 500 });
