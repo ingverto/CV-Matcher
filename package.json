@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.99.3",
+    "@vercel/analytics": "^2.0.1",
     "next": "16.2.1",
     "openai": "^6.32.0",
     "pdf-parse": "^2.4.5",
